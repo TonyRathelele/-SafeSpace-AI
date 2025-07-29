@@ -13,6 +13,54 @@ declare const L: any;
 // Polyfill for SpeechRecognition
 const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
 
+// Report type definition, moved to top level for global access
+interface Report {
+    id: number;
+    type: 'Voice' | 'Live Video';
+    timestamp: string;
+    analysis: {
+        category: string;
+        summary: string;
+        tone?: string;
+        movement_analysis?: string;
+    };
+    transcript?: string;
+    location?: string;
+    imageBase64?: string;
+}
+
+// Helper functions for localStorage-based report history
+const getReportsFromStorage = (): Report[] => {
+    try {
+        const saved = localStorage.getItem('reportsHistory');
+        const reports = saved ? JSON.parse(saved) : [];
+        // Sort by timestamp descending (newest first)
+        return reports.sort((a: Report, b: Report) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+    } catch (error) {
+        console.error("Could not parse reports from localStorage", error);
+        return [];
+    }
+};
+
+const saveReportToStorage = (reportData: Omit<Report, 'id' | 'timestamp'>): Report => {
+    // Get currently stored reports, but unsorted to just append.
+    const saved = localStorage.getItem('reportsHistory');
+    const reports = saved ? JSON.parse(saved) : [];
+    const newReport: Report = {
+        id: Date.now(),
+        timestamp: new Date().toISOString(),
+        ...reportData
+    };
+    reports.push(newReport);
+    localStorage.setItem('reportsHistory', JSON.stringify(reports));
+    return newReport;
+};
+
+const clearReportsFromStorage = () => {
+    localStorage.removeItem('reportsHistory');
+};
+
+
 const App = () => {
     const [page, setPage] = useState('home');
     const [ai, setAi] = useState<GoogleGenAI | null>(null);
@@ -479,31 +527,22 @@ const VoiceReportPage = ({ ai }: { ai: GoogleGenAI }) => {
         setSubmissionError(null);
         try {
             const reportData = {
-                type: 'Voice',
+                type: 'Voice' as const,
                 analysis: analysisResult,
                 transcript: transcript,
                 location: locationDisplay
             };
-
-            const response = await fetch('http://localhost:3001/api/reports', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify(reportData),
-            });
-
-            if (!response.ok) {
-                const err = await response.json();
-                throw new Error(err.error || 'Failed to submit report to the backend.');
-            }
-
-            const responseData = await response.json();
-            alert(`Report Submitted Successfully! Your reference ID is: ${responseData.id}`);
+    
+            const newReport = saveReportToStorage(reportData);
+            
+            // Simulate a small delay for user feedback
+            await new Promise(resolve => setTimeout(resolve, 500));
+    
+            alert(`Report Submitted Successfully! Your reference ID is: ${newReport.id}`);
             resetReport();
         } catch (error: any) {
             console.error("Error submitting report:", error);
-            setSubmissionError(`There was an error submitting your report: ${error.message}. Please ensure the backend is running.`);
+            setSubmissionError(`There was an error submitting your report locally: ${error.message}.`);
         } finally {
             setIsSubmitting(false);
         }
@@ -783,7 +822,7 @@ const LiveReportPage = ({ ai }: { ai: GoogleGenAI }) => {
         setSubmissionError(null);
         try {
             const reportData = {
-                type: 'Live Video',
+                type: 'Live Video' as const,
                 analysis: {
                     category: incidentDetails.category,
                     summary: incidentDetails.description,
@@ -791,25 +830,16 @@ const LiveReportPage = ({ ai }: { ai: GoogleGenAI }) => {
                 imageBase64: incidentDetails.imageBase64,
             };
             
-            const response = await fetch('http://localhost:3001/api/reports', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify(reportData),
-            });
+            const newReport = saveReportToStorage(reportData);
             
-            if (!response.ok) {
-                const err = await response.json();
-                throw new Error(err.error || 'Failed to submit report to the backend.');
-            }
+            // Simulate a small delay for user feedback
+            await new Promise(resolve => setTimeout(resolve, 500));
 
-            const responseData = await response.json();
-            alert(`Report Submitted Successfully! Your reference ID is: ${responseData.id}`);
+            alert(`Report Submitted Successfully! Your reference ID is: ${newReport.id}`);
             stopCamera();
         } catch (error: any) {
             console.error("Error submitting confirmed report:", error);
-            setSubmissionError(`There was an error submitting your report: ${error.message}. Please ensure the backend is running.`);
+            setSubmissionError(`There was an error submitting your report locally: ${error.message}.`);
         } finally {
             setIsSubmittingReport(false);
         }
@@ -1279,39 +1309,20 @@ const JournalPage = () => {
 };
 
 
-interface Report {
-    id: number;
-    type: 'Voice' | 'Live Video';
-    timestamp: string;
-    analysis: {
-        category: string;
-        summary: string;
-        tone?: string;
-        movement_analysis?: string;
-    };
-    transcript?: string;
-    location?: string;
-    imageBase64?: string;
-}
-
 const HistoryPage = () => {
     const [reports, setReports] = useState<Report[]>([]);
     const [isLoading, setIsLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const [selectedReport, setSelectedReport] = useState<Report | null>(null);
 
-    const fetchReports = async () => {
+    const fetchReports = () => {
         setIsLoading(true);
         setError(null);
         try {
-            const response = await fetch('http://localhost:3001/api/reports');
-            if (!response.ok) {
-                throw new Error('Failed to fetch reports. Is the backend server running?');
-            }
-            const data = await response.json();
+            const data = getReportsFromStorage();
             setReports(data);
         } catch (err: any) {
-            setError(err.message);
+            setError("Failed to load reports from local storage.");
             console.error(err);
         } finally {
             setIsLoading(false);
@@ -1322,20 +1333,15 @@ const HistoryPage = () => {
         fetchReports();
     }, []);
 
-    const handleClearHistory = async () => {
+    const handleClearHistory = () => {
         if (window.confirm('Are you sure you want to delete all report history? This action cannot be undone.')) {
             setError(null);
             try {
-                const response = await fetch('http://localhost:3001/api/reports', {
-                    method: 'DELETE',
-                });
-                if (!response.ok) {
-                    throw new Error('Failed to clear history. The backend might be down.');
-                }
+                clearReportsFromStorage();
                 setReports([]);
                 alert('Report history cleared successfully.');
             } catch (err: any) {
-                setError(err.message);
+                setError("Failed to clear history from local storage.");
                 console.error(err);
             }
         }
@@ -1353,18 +1359,11 @@ const HistoryPage = () => {
         if (error) {
             return (
                 <div className="alert alert-danger mt-4" role="alert">
-                    <h4 className="alert-heading"><i className="bi bi-exclamation-triangle-fill"></i> Backend Connection Error</h4>
+                    <h4 className="alert-heading"><i className="bi bi-exclamation-triangle-fill"></i> Error</h4>
                     <p>
-                        The application could not connect to the backend server. As a result, report history cannot be loaded or modified.
+                        There was an error loading or modifying the report history from your browser's local storage.
                     </p>
                     <hr />
-                    <p className="mb-1">
-                        Please ensure the backend server is running. To start it, navigate to the <code>/backend</code> folder in your terminal and run the following commands:
-                    </p>
-                    <ol className="mb-2">
-                        <li><code>npm install</code> (run this once)</li>
-                        <li><code>npm start</code></li>
-                    </ol>
                     <p className="mb-0 small text-muted">
                         <strong>Details:</strong> {error}
                     </p>
